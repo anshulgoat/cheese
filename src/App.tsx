@@ -4,7 +4,7 @@ import { GameScreen } from './ui/GameScreen';
 import { Home, type HomeChoices } from './ui/Home';
 
 const STORAGE_KEY = 'three-check:home';
-const DEFAULT_CHOICES: HomeChoices = { mode: 'otb', colorChoice: 'white', level: 3, autoFlip: false };
+const DEFAULT_CHOICES: HomeChoices = { mode: 'otb', colorChoice: 'random', level: 3, autoFlip: false };
 
 function loadChoices(): HomeChoices {
   try {
@@ -37,11 +37,21 @@ export default function App() {
   };
 
   const rematch = useCallback(() => toSettings(choices), [choices]);
+  const home = () => setGame(null);
 
   return (
     <div className="app">
+      <header className="site-header">
+        <button className="site-title" onClick={home} aria-label="Home">
+          <span className="site-mark" aria-hidden>+3</span>
+          three<b>check</b>
+        </button>
+        <nav className="site-nav">
+          <button onClick={home} className={game ? '' : 'on'}>Play</button>
+        </nav>
+      </header>
       {game ? (
-        <GameScreen key={game.key} settings={game.settings} rematchSettings={rematch} onMenu={() => setGame(null)} />
+        <GameScreen key={game.key} settings={game.settings} rematchSettings={rematch} onMenu={home} />
       ) : (
         <Home initial={choices} onStart={start} />
       )}

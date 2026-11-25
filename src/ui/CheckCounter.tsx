@@ -7,24 +7,30 @@ interface Props {
   active: boolean;
   /** Small "thinking" indicator next to the name. */
   thinking?: boolean;
+  /** Extra class, e.g. top/bottom placement. */
+  className?: string;
 }
 
-export function CheckCounter({ color, label, checks, active, thinking }: Props) {
+/** Player name + a clock-style box showing checks given (lichess round layout). */
+export function CheckCounter({ color, label, checks, active, thinking, className = '' }: Props) {
   const danger = checks === 2;
   return (
-    <div className={`player-strip ${active ? 'active' : ''} ${danger ? 'danger' : ''}`}>
-      <div className="player-name">
-        <span className={`color-dot ${color}`} aria-hidden />
-        <span>{label}</span>
-        {thinking && <span className="thinking-dots" aria-label="thinking"><i /><i /><i /></span>}
+    <div className={`rplayer ${className}`}>
+      <div className="ruser">
+        <span className={`ruser-dot ${color}`} aria-hidden />
+        <span className="ruser-name">{label}</span>
+        {thinking && <span className="spinner" aria-label="thinking" />}
       </div>
-      <div className="checks" aria-label={`${label} has given ${checks} of 3 checks`}>
-        <span className="checks-label">{danger ? 'one more wins' : 'checks'}</span>
+      <div
+        className={`rchecks ${active ? 'running' : ''} ${danger ? 'danger' : ''}`}
+        aria-label={`${label} has given ${checks} of 3 checks`}
+      >
         {[0, 1, 2].map(i => (
           <span key={i} className={`pip ${i < checks ? 'filled' : ''}`}>
-            <span className="pip-plus">+</span>
+            +
           </span>
         ))}
+        <span className="rchecks-count">{checks}/3</span>
       </div>
     </div>
   );

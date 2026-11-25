@@ -58,7 +58,11 @@ export function Board(props: BoardProps) {
       },
     });
     apiRef.current = api;
+    // Keep chessground's cached geometry in sync with layout changes.
+    const ro = new ResizeObserver(() => api.redrawAll());
+    ro.observe(elRef.current);
     return () => {
+      ro.disconnect();
       api.destroy();
       apiRef.current = null;
     };

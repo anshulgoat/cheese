@@ -1,6 +1,6 @@
-import { useCallback, useMemo, useState } from 'react';
-import { describeOutcome, lastMoveSquares, legalDests, moverOf, needsPromotion, opposite } from '../game/rules';
-import type { Color, GameSettings } from '../game/types';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { describeOutcome, lastMoveSquares, legalDests, moverOf, needsPromotion, opposite, START_FEN } from '../game/rules';
+import type { Color, GameSettings, Outcome } from '../game/types';
 import { useGame } from '../game/useGame';
 import { Board } from './Board';
 import { CheckCounter } from './CheckCounter';
@@ -14,17 +14,58 @@ interface Props {
   onMenu: () => void;
 }
 
+const LEVEL_HINT = ['', 'Beginner', 'Novice', 'Casual', 'Club', 'Strong club', 'Expert', 'Master', 'Maximum'];
 const cap = (c: Color) => (c === 'white' ? 'White' : 'Black');
+const score = (o: Outcome) => (o.winner === 'white' ? '1-0' : o.winner === 'black' ? '0-1' : '½-½');
+const fenTurn = (fen: string): Color => (fen.split(' ')[1] === 'b' ? 'black' : 'white');
 
 export function GameScreen({ settings: initialSettings, rematchSettings, onMenu }: Props) {
   const game = useGame(initialSettings);
   const { state, settings, orientation, thinking, engineError } = game;
   const [promo, setPromo] = useState<{ from: string; to: string } | null>(null);
   const [syncKey, setSyncKey] = useState(0);
-  const [modalDismissed, setModalDismissed] = useState(false);
+  /** Ply being viewed (0 = start position), or null when following the live game. */
+  const [viewPly, setViewPly] = useState<number | null>(null);
 
-  const dests = useMemo(() => (game.canMove ? legalDests(state) : new Map<string, string[]>()), [state, game.canMove]);
-  const lastMove = lastMoveSquares(state);
+  const total = state.history.length;
+  useEffect(() => setViewPly(null), [total]);
+  const ply = viewPly === null || viewPly >= total ? total : Math.max(0, viewPly);
+  const live = ply === total;
+
+  const goTo = useCallback((p: number) => setViewPly(p >= total ? null : Math.max(0, p)), [total]);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.target instanceof HTMLInputElement) return;
+      if (e.key === 'ArrowLeft') goTo(ply - 1);
+      else if (e.key === 'ArrowRight') goTo(ply + 1);
+      else if (e.key === 'ArrowUp' || e.key === 'Home') goTo(0);
+      else if (e.key === 'ArrowDown' || e.key === 'End') goTo(total);
+      else if (e.key === 'f') game.flip();
+      else return;
+      e.preventDefault();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [goTo, ply, total, game]);
+
+  const canMove = game.canMove && live;
+  const dests = useMemo(() => (canMove ? legalDests(state) : new Map<string, string[]>()), [state, canMove]);
+
+  // Position shown on the board (live or browsed).
+  const startFen = state.startFen ?? START_FEN;
+  const viewFen = live ? state.fen : ply === 0 ? startFen : state.history[ply - 1].fen;
+  const viewTurn = live ? state.turn : fenTurn(viewFen);
+  const viewLast: [string, string] | undefined = live
+    ? lastMoveSquares(state)
+    : ply > 0
+      ? [state.history[ply - 1].uci.slice(0, 2), state.history[ply - 1].uci.slice(2, 4)]
+      : undefined;
+  const viewInCheck = live ? state.inCheck : ply > 0 && /[+#]$/.test(state.history[ply - 1].san);
+  const checksAt = (c: Color) =>
+    live
+      ? state.checksGiven[c]
+      : state.history.slice(0, ply).filter((h, i) => moverOf(state, i) === c && /[+#]$/.test(h.san)).length;
 
   const onMove = useCallback(
     (from: string, to: string) => {
@@ -39,57 +80,76 @@ export function GameScreen({ settings: initialSettings, rematchSettings, onMenu 
 
   const ai = settings.mode === 'ai';
   const human = settings.playerColor;
-  const labelFor = (c: Color) => (ai ? (c === human ? 'You' : `Computer · L${settings.level}`) : cap(c));
+  const labelFor = (c: Color) => (ai ? (c === human ? 'You' : `Fairy-Stockfish level ${settings.level}`) : cap(c));
   const top = opposite(orientation);
   const bottom = orientation;
 
   let status: string;
-  if (state.outcome) status = describeOutcome(state.outcome);
-  else if (ai && thinking) status = 'Computer is thinking…';
-  else if (ai) status = state.turn === human ? (state.inCheck ? 'You are in check!' : 'Your move') : 'Computer to move';
-  else status = `${cap(state.turn)} to move${state.inCheck ? ' — check!' : ''}`;
+  if (ai && thinking) status = 'Computer is thinking…';
+  else if (ai) status = state.turn === human ? (state.inCheck ? 'You are in check!' : 'Your turn') : 'Waiting for opponent';
+  else status = `${cap(state.turn)} to play${state.inCheck ? ' — check!' : ''}`;
 
   const newGame = () => {
     setPromo(null);
-    setModalDismissed(false);
     game.newGame(rematchSettings());
   };
-
   const undo = () => {
     setPromo(null);
-    setModalDismissed(false);
     game.undo();
   };
 
-  const resultTitle = (() => {
-    const o = state.outcome;
-    if (!o) return '';
-    if (!o.winner) return 'Draw';
-    if (ai) return o.winner === human ? 'You win!' : 'You lose';
-    return `${cap(o.winner)} wins`;
-  })();
+  const player = (c: Color, where: 'top' | 'bottom') => (
+    <CheckCounter
+      className={where}
+      color={c}
+      label={labelFor(c)}
+      checks={checksAt(c)}
+      active={!state.outcome && live && state.turn === c}
+      thinking={thinking && ai && c !== human}
+    />
+  );
 
-  const firstMover = moverOf(state, 0);
+  const outcome = state.outcome;
+  const resultBlock = outcome && (
+    <div className="result-wrap">
+      <p className="result">{score(outcome)}</p>
+      <p className="status-text">{describeOutcome(outcome)}</p>
+    </div>
+  );
 
   return (
-    <main className="game">
-      <div className="board-col">
-        <CheckCounter
-          color={top}
-          label={labelFor(top)}
-          checks={state.checksGiven[top]}
-          active={!state.outcome && state.turn === top}
-          thinking={thinking && ai && top !== human}
-        />
+    <main className="round">
+      <aside className="round-side box">
+        <div className="game-meta">
+          <span className="game-icon" aria-hidden>+3</span>
+          <div>
+            <div className="game-title">Three-check · Casual</div>
+            <div className="muted">{ai ? `vs computer · ${LEVEL_HINT[settings.level]}` : 'Over the board'}</div>
+          </div>
+        </div>
+        <div className="game-players">
+          <div>
+            <span className="ruser-dot white" /> {labelFor('white')}
+          </div>
+          <div>
+            <span className="ruser-dot black" /> {labelFor('black')}
+          </div>
+        </div>
+        <p className="muted small">First to give three checks wins. Checkmate still wins too.</p>
+        {outcome && <p className="side-result">{describeOutcome(outcome)}</p>}
+      </aside>
+
+      <div className="round-board">
+        {player(top, 'top')}
         <div className="board-wrap">
           <Board
-            fen={state.fen}
+            fen={viewFen}
             orientation={orientation}
-            turnColor={state.turn}
-            movableColor={game.canMove && !promo ? state.turn : undefined}
+            turnColor={viewTurn}
+            movableColor={canMove && !promo ? state.turn : undefined}
             dests={dests}
-            lastMove={lastMove}
-            check={state.inCheck ? state.turn : false}
+            lastMove={viewLast}
+            check={viewInCheck ? viewTurn : false}
             onMove={onMove}
             syncKey={syncKey}
           />
@@ -108,71 +168,61 @@ export function GameScreen({ settings: initialSettings, rematchSettings, onMenu 
             />
           )}
         </div>
-        <CheckCounter
-          color={bottom}
-          label={labelFor(bottom)}
-          checks={state.checksGiven[bottom]}
-          active={!state.outcome && state.turn === bottom}
-          thinking={thinking && ai && bottom !== human}
-        />
+        {player(bottom, 'bottom')}
       </div>
 
-      <aside className="side-col">
-        <div className={`status ${state.outcome ? 'over' : ''} ${state.inCheck && !state.outcome ? 'in-check' : ''}`} role="status" aria-live="polite">
-          {thinking && <span className="spinner" aria-hidden />}
-          {status}
-        </div>
-        {engineError && ai && (
-          <div className="engine-error" role="alert">
-            <p>{engineError}</p>
-            <div className="row">
-              <button className="btn small" onClick={game.retryEngine}>Retry</button>
-              <button className="btn small ghost" onClick={onMenu}>Back to menu</button>
-            </div>
+      <div className="round-tools">
+        {player(top, 'top')}
+        <div className="rpanel">
+          <div className="rnav">
+            <button onClick={game.flip} title="Flip board (f)" aria-label="Flip board">⇅</button>
+            <button onClick={() => goTo(0)} disabled={ply === 0} title="First move" aria-label="First move">⏮</button>
+            <button onClick={() => goTo(ply - 1)} disabled={ply === 0} title="Previous move" aria-label="Previous move">◀</button>
+            <button onClick={() => goTo(ply + 1)} disabled={live} title="Next move" aria-label="Next move">▶</button>
+            <button onClick={() => goTo(total)} disabled={live} title="Last move" aria-label="Last move">⏭</button>
           </div>
-        )}
-
-        <div className="controls">
-          <button className="btn" onClick={undo} disabled={!game.canUndo} title="Take back">
-            ↶ Undo
-          </button>
-          <button className="btn" onClick={game.flip} title="Flip board">
-            ⇅ Flip
-          </button>
-          <button className="btn danger" onClick={game.resign} disabled={!!state.outcome} title="Resign">
-            ⚑ Resign
-          </button>
-          <button className="btn" onClick={newGame} title="New game">
-            ＋ New
-          </button>
-        </div>
-
-        <MoveList history={state.history} blackFirst={firstMover === 'black'} />
-
-        <button className="btn ghost menu-btn" onClick={onMenu}>
-          ← Menu
-        </button>
-      </aside>
-
-      {state.outcome && !modalDismissed && (
-        <div className="modal-overlay" onClick={() => setModalDismissed(true)}>
-          <div className="modal" role="dialog" aria-modal="true" onClick={e => e.stopPropagation()}>
-            <div className={`modal-badge ${state.outcome.reason}`}>
-              {state.outcome.reason === 'three-check' ? '+++' : state.outcome.winner ? '♚' : '½'}
+          <MoveList
+            history={state.history}
+            blackFirst={moverOf(state, 0) === 'black'}
+            current={ply - 1}
+            onSelect={i => goTo(i + 1)}
+            footer={resultBlock}
+          />
+          {engineError && ai && (
+            <div className="engine-error" role="alert">
+              <p>{engineError}</p>
+              <div className="row">
+                <button className="button small" onClick={game.retryEngine}>Retry</button>
+                <button className="button small ghost" onClick={onMenu}>Back to menu</button>
+              </div>
             </div>
-            <h2>{resultTitle}</h2>
-            <p>{describeOutcome(state.outcome)}</p>
-            <p className="muted small">
-              Checks — White {state.checksGiven.white}/3 · Black {state.checksGiven.black}/3
-            </p>
-            <div className="row">
-              <button className="btn primary" onClick={newGame}>Play again</button>
-              <button className="btn" onClick={() => setModalDismissed(true)}>View board</button>
-              <button className="btn ghost" onClick={onMenu}>Menu</button>
+          )}
+          {outcome ? (
+            <div className="follow-up">
+              <button className="button wide" onClick={newGame}>Rematch</button>
+              <button className="button ghost wide" onClick={onMenu}>New opponent</button>
             </div>
-          </div>
+          ) : (
+            <>
+              <div className={`rstatus ${state.inCheck ? 'in-check' : ''}`} role="status" aria-live="polite">
+                {status}
+              </div>
+              <div className="ractions">
+                <button onClick={undo} disabled={!game.canUndo} title="Takeback">
+                  <span aria-hidden>↶</span> Takeback
+                </button>
+                <button onClick={game.resign} title="Resign">
+                  <span aria-hidden>⚑</span> Resign
+                </button>
+                <button onClick={newGame} title="New game">
+                  <span aria-hidden>↻</span> New
+                </button>
+              </div>
+            </>
+          )}
         </div>
-      )}
+        {player(bottom, 'bottom')}
+      </div>
     </main>
   );
 }
