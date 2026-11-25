@@ -33,6 +33,8 @@ export interface GameState {
   checksGiven: Record<Color, number>;
   inCheck: boolean;
   outcome: Outcome | null;
+  /** FEN the game started from (added by rules layer; defaults to the standard start). */
+  startFen?: string;
 }
 
 export interface GameSettings {

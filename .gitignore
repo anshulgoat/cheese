@@ -1,2 +1,4 @@
 node_modules
 dist
+public/fairy-stockfish/
+*.tsbuildinfo
